@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="th"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ห้องเรียนเสมือนจริง VR</title>
+<style>
+:root{--bg:#0b1220;--panel:rgba(255,255,255,.9);--text:#0b1a33;--muted:#44566f;--accent:#0e7490;--border:rgba(14,116,144,.4);box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--panel:rgba(12,22,42,.85);--text:#e8f1ff;--muted:#9fb3d1;--accent:#22d3ee;--border:rgba(34,211,238,.4)}}
+:root[data-theme="dark"]{--panel:rgba(12,22,42,.85);--text:#e8f1ff;--muted:#9fb3d1;--accent:#22d3ee;--border:rgba(34,211,238,.4)}
+html,body{height:100%;margin:0;background:var(--bg);font-family:"Sarabun","Noto Sans Thai",system-ui,sans-serif;overflow:hidden}
+canvas{position:fixed;inset:0;width:100%;height:100%;touch-action:none;display:block}
+.box{position:fixed;background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:16px;backdrop-filter:blur(12px);box-shadow:0 8px 30px rgba(0,0,0,.28);padding:12px 16px}
+#hud{top:calc(env(safe-area-inset-top,0px) + 10px);left:10px;max-width:min(92vw,420px)}
+#hud h1{font-size:18px;margin:0 0 6px;color:var(--accent);letter-spacing:.2px}
+#hud p{font-size:13px;margin:0;color:var(--muted);line-height:1.5}
+#btns{top:calc(env(safe-area-inset-top,0px) + 10px);right:10px;display:flex;gap:8px;padding:8px}
+button{font:inherit;font-size:13px;background:transparent;color:var(--text);border:1px solid var(--border);border-radius:8px;padding:6px 10px;cursor:pointer}
+button:hover{background:var(--border)}
+#info{left:50%;transform:translateX(-50%);bottom:calc(env(safe-area-inset-bottom,0px) + 14px);width:min(92vw,520px);display:none}
+#info h2{margin:0 0 6px;font-size:17px;color:var(--accent)}
+#info p{margin:0;font-size:14px;line-height:1.6}
+#x{position:absolute;top:6px;right:8px;padding:2px 8px}
+#err{inset:0;margin:auto;height:fit-content;width:min(90vw,360px);text-align:center}
+</style></head><body>
+<canvas id="c"></canvas>
+<div class="box" id="hud"><h1>🏫 ห้องเรียนเสมือนจริง</h1>
+<p>ลากเมาส์เพื่อมองรอบ • W A S D หรือปุ่มลูกศรเพื่อเดิน • Space กระโดด • E นั่ง/ลุก • Shift วิ่ง • Z โบกมือ • X เต้น • H ยกมือ • L ไฟ • N กลางวัน/คืน • ดับเบิลคลิกพื้นเพื่อเดินไป • คลิกวัตถุเพื่อดูข้อมูล</p></div>
+<div class="box" id="btns"><button id="reset">รีเซ็ตตำแหน่ง</button><button id="lt">💡 ไฟ</button><button id="nt">🌙 กลางคืน</button><button id="vw">มุมมอง: บุคคลที่ 3</button><button id="tg">ซ่อน/แสดงป้าย</button></div>
+<div class="box" id="info"><button id="x">✕</button><h2 id="it"></h2><p id="id"></p></div>
+<div class="box" id="tip" hidden style="top:calc(env(safe-area-inset-top,0px) + 14px);left:50%;transform:translateX(-50%);font-size:14px"></div>
+<div class="box" id="err" hidden>เบราว์เซอร์นี้ไม่รองรับ WebGL กรุณาลองเบราว์เซอร์อื่น</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+(function(){
+var cv=document.getElementById('c'),renderer;
+try{renderer=new THREE.WebGLRenderer({canvas:cv,antialias:true,powerPreference:'low-power'});}
+catch(e){document.getElementById('err').hidden=false;return;}
+renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,1.5));
+renderer.setSize(innerWidth,innerHeight);
+var scene=new THREE.Scene();scene.background=new THREE.Color(0x0b1220);
+var camera=new THREE.PerspectiveCamera(70,innerWidth/innerHeight,.1,50);camera.layers.enable(1);
+var hemi=new THREE.HemisphereLight(0xfff6e6,0xa8957c,1),lamps=[];scene.add(hemi);
+var dl=new THREE.DirectionalLight(0xffe9c4,.5);dl.position.set(3,6,4);scene.add(dl);
+
+var mats={};
+function mat(c){return mats[c]||(mats[c]=new THREE.MeshLambertMaterial({color:c}));}
+function box(w,h,d,c,x,y,z,p){var m=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),mat(c));m.position.set(x,y,z);(p||scene).add(m);return m;}
+function basic(w,h,c,x,y,z,p){var m=new THREE.Mesh(new THREE.PlaneGeometry(w,h),c.isTexture?new THREE.MeshBasicMaterial({map:c}):new THREE.MeshBasicMaterial({color:c}));m.position.set(x,y,z);(p||scene).add(m);return m;}
+var objs=[];
+function info(o,t,d){o.userData.info={t:t,d:d};objs.push(o);return o;}
+
+/* room */
+var room=new THREE.Mesh(new THREE.BoxGeometry(10,3.2,8),new THREE.MeshLambertMaterial({color:0xeef2f7,side:THREE.BackSide}));
+room.position.y=1.6;scene.add(room);
+var floor=new THREE.Mesh(new THREE.PlaneGeometry(10,8),new THREE.MeshLambertMaterial({map:tex(1024,820,function(g,W,H){var rows=16,rh=H/rows;for(var r=0;r<rows;r++){var x=-(r%2)*90;while(x<W){var w=180+Math.random()*60,l=46+Math.random()*10;g.fillStyle='hsl(28,'+(36+Math.random()*10)+'%,'+l+'%)';g.fillRect(x,r*rh,w,rh);g.strokeStyle='rgba(60,35,15,.35)';g.strokeRect(x,r*rh,w,rh);x+=w;}}})}));
+floor.rotation.x=-Math.PI/2;floor.position.y=.01;scene.add(floor);
+
+/* canvas texture helpers */
+function tex(w,h,fn){var c=document.createElement('canvas');c.width=w;c.height=h;fn(c.getContext('2d'),w,h);return new THREE.CanvasTexture(c);}
+var signs=new THREE.Group();scene.add(signs);
+function sign(text,x,y,z,w){w=w||1.6;
+var t=tex(512,128,function(g,W,H){g.fillStyle='rgba(8,20,40,.88)';g.fillRect(0,0,W,H);g.strokeStyle='#22d3ee';g.lineWidth=6;g.strokeRect(3,3,W-6,H-6);g.fillStyle='#e8f1ff';g.font='600 44px sans-serif';g.textAlign='center';g.textBaseline='middle';g.fillText(text,W/2,H/2);});
+var s=new THREE.Sprite(new THREE.SpriteMaterial({map:t}));s.scale.set(w,w/4,1);s.position.set(x,y,z);s.layers.set(1);signs.add(s);}
+
+/* decor */
+var shTex=tex(128,128,function(g){var r=g.createRadialGradient(64,64,4,64,64,62);r.addColorStop(0,'rgba(0,0,0,.35)');r.addColorStop(1,'rgba(0,0,0,0)');g.fillStyle=r;g.fillRect(0,0,128,128);});
+function shade(w,d,x,z,p){var m=new THREE.Mesh(new THREE.PlaneGeometry(w,d),new THREE.MeshBasicMaterial({map:shTex,transparent:true,depthWrite:false}));m.rotation.x=-Math.PI/2;m.position.set(x,.02,z);m.raycast=function(){};(p||scene).add(m);}
+[[0,-3.99,10,.02],[0,3.99,10,.02],[-4.99,0,.02,8],[4.99,0,.02,8]].forEach(function(a){var w=a[2]>1?a[2]:.05,d=a[3]>1?a[3]:.05;box(a[2],.95,a[3],0x2c5f7c,a[0],.475,a[1]);box(w,.04,d,0xffffff,a[0],.97,a[1]);box(w,.12,d,0x1f2d3a,a[0],.06,a[1]);});
+[-2.6,0,2.6].forEach(function(x){[-1.4,1.6].forEach(function(z){var l=basic(1.3,.5,0xffffff,x,3.19,z);l.rotation.x=Math.PI/2;l.raycast=function(){};lamps.push(l);});});
+[[3.4,1.5,0x2e4a7d],[3.0,1.15,0x4a78b8]].forEach(function(a,i){var r=basic(a[0],a[1],a[2],0,.02+i*.004,-1.9);r.rotation.x=-Math.PI/2;r.raycast=function(){};});
+[-2,0,2].forEach(function(z){[-.95,.95].forEach(function(o){box(.12,1.55,.3,0x3b6ea5,-4.9,1.75,z+o);});});
+function plant(x,z){var g=new THREE.Group();scene.add(g);var p=new THREE.Mesh(new THREE.CylinderGeometry(.2,.15,.35,10),mat(0xb5651d));p.position.set(x,.175,z);g.add(p);var a=new THREE.Mesh(new THREE.IcosahedronGeometry(.34,0),mat(0x2e8b57));a.position.set(x,.72,z);g.add(a);var b=new THREE.Mesh(new THREE.IcosahedronGeometry(.22,0),mat(0x3cb371));b.position.set(x+.12,1.05,z-.05);g.add(b);shade(.9,.9,x,z,g);info(g,'ต้นไม้ประดับ','ช่วยให้บรรยากาศในห้องเรียนสดชื่นและผ่อนคลาย ต้นไม้ในร่มยังช่วยฟอกอากาศเล็กน้อยด้วย');}
+plant(-4.3,-3.4);plant(-4.3,3.4);plant(4.3,3.5);sign('ต้นไม้',-4.3,1.5,-3.4,.9);
+function poster(x,y,z,ry,t,d,draw,label){var g=new THREE.Group();g.position.set(x,y,z);g.rotation.y=ry;scene.add(g);box(1.1,1.5,.03,0x1f2d3a,0,0,0,g);basic(1,1.4,tex(400,560,draw),0,0,.02,g);info(g,t,d);sign(label,x,y+1.0,z+(ry?-.2:.2),1.2);}
+poster(-3.4,1.9,-3.95,0,'โปสเตอร์ตารางธาตุ','โปสเตอร์ความรู้ประกอบการเรียน ช่วยให้นักเรียนทบทวนเนื้อหาได้ทุกครั้งที่มองผ่าน',function(g,W,H){g.fillStyle='#fff7e6';g.fillRect(0,0,W,H);g.fillStyle='#0e7490';g.font='700 40px sans-serif';g.textAlign='center';g.fillText('ตารางธาตุ',W/2,60);for(var r=0;r<7;r++)for(var c=0;c<8;c++){g.fillStyle='hsl('+((r*8+c)*17%360)+',65%,62%)';g.fillRect(24+c*44,90+r*60,40,54);}},'ตารางธาตุ');
+poster(-2.2,1.9,3.95,Math.PI,'โปสเตอร์สร้างแรงบันดาลใจ','ข้อความให้กำลังใจติดไว้ท้ายห้อง ช่วยสร้างบรรยากาศการเรียนรู้เชิงบวก',function(g,W,H){var r=g.createLinearGradient(0,0,0,H);r.addColorStop(0,'#0ea5e9');r.addColorStop(1,'#7c3aed');g.fillStyle=r;g.fillRect(0,0,W,H);g.fillStyle='#fff';g.textAlign='center';g.font='700 64px sans-serif';g.fillText('ความรู้',W/2,230);g.fillText('คือพลัง',W/2,310);g.font='500 30px sans-serif';g.fillText('เรียนรู้ทุกวัน',W/2,420);},'โปสเตอร์');
+
+/* whiteboard (front wall) */
+var wb=new THREE.Group();scene.add(wb);
+box(4.2,1.5,.06,0xb8c2cc,0,1.7,-3.97,wb);box(3.6,.06,.14,0x8a949f,0,.96,-3.9,wb);box(.14,.03,.03,0xc0392b,-.6,1.0,-3.88,wb);box(.14,.03,.03,0x1d4ed8,-.35,1.0,-3.88,wb);
+basic(4,1.3,tex(1024,330,function(g,W,H){g.fillStyle='#fff';g.fillRect(0,0,W,H);g.fillStyle='#0e7490';g.font='700 64px sans-serif';g.textAlign='center';g.fillText('ยินดีต้อนรับสู่ห้องเรียน',W/2,120);g.fillStyle='#334155';g.font='500 42px sans-serif';g.fillText('วิชา เทคโนโลยีสารสนเทศ',W/2,200);g.fillText('วันนี้เรียนเรื่อง: 3D และ VR',W/2,265);}),0,1.7,-3.93,wb);
+info(wb,'ไวต์บอร์ด','ใช้เขียนอธิบายเนื้อหาหน้าชั้นเรียน ครูใช้ปากกาไวต์บอร์ดเขียนและลบออกได้ง่าย ควรนั่งให้มองเห็นกระดานชัดเจน');
+sign('ไวต์บอร์ด',0,2.75,-3.8);
+
+/* clock */
+var ck=new THREE.Group();ck.position.set(3.6,2.5,-3.95);scene.add(ck);
+var cd=new THREE.Mesh(new THREE.CylinderGeometry(.28,.28,.04,20),mat(0xffffff));cd.rotation.x=Math.PI/2;ck.add(cd);
+var hmin=new THREE.Group(),hhr=new THREE.Group();hmin.position.z=.03;hhr.position.z=.03;ck.add(hmin);ck.add(hhr);box(.02,.2,.01,0x111111,0,.1,0,hmin);box(.025,.13,.01,0x111111,0,.065,0,hhr);
+info(ck,'นาฬิกาแขวนผนัง','ช่วยให้ครูและนักเรียนบริหารเวลาเรียนได้ตรงเวลา ตั้งไว้ฝั่งหน้าห้องเพื่อให้มองเห็นง่าย');
+sign('นาฬิกา',3.6,3.0,-3.8,1.1);
+
+/* teacher desk + computer */
+var td=new THREE.Group();scene.add(td);
+shade(2.7,1.4,0,-2.8,td);box(2.1,.06,.85,0x8d5f36,0,.75,-2.8,td);box(.06,.72,.8,0x6f4a2a,-1,.36,-2.8,td);box(.06,.72,.8,0x6f4a2a,1,.36,-2.8,td);
+info(td,'โต๊ะครู','โต๊ะสำหรับวางเอกสาร สื่อการสอน และคอมพิวเตอร์ของครู อยู่หน้าห้องเพื่อดูแลนักเรียนได้ทั่วถึง');
+sign('โต๊ะครู',-.8,1.5,-2.8,1.2);
+var pc=new THREE.Group();pc.position.set(.3,.78,-2.85);scene.add(pc);
+box(.22,.02,.16,0x222a35,0,0,0,pc);box(.04,.16,.04,0x222a35,0,.09,0,pc);box(.55,.34,.03,0x222a35,0,.34,0,pc);
+basic(.5,.29,0x1e5a8a,0,.34,.02,pc);box(.4,.02,.14,0x333b47,0,.01,.3,pc);
+info(pc,'คอมพิวเตอร์ของครู','ใช้เปิดสไลด์ วิดีโอ และสื่อการสอน เชื่อมต่อกับโปรเจกเตอร์เพื่อฉายภาพขึ้นหน้าห้อง');
+sign('คอมพิวเตอร์',.3,1.55,-2.85,1.3);
+
+/* projector */
+var pj=new THREE.Group();pj.position.set(0,3.0,.5);scene.add(pj);
+box(.5,.16,.38,0x2b3440,0,0,0,pj);box(.05,.2,.05,0x555e6b,0,.17,0,pj);
+var ln=new THREE.Mesh(new THREE.CylinderGeometry(.07,.07,.08,12),mat(0x111111));ln.rotation.x=Math.PI/2;ln.position.set(0,0,-.22);pj.add(ln);
+info(pj,'โปรเจกเตอร์','ฉายภาพจากคอมพิวเตอร์ขึ้นจอหรือผนังหน้าห้อง ติดตั้งที่เพดานเพื่อไม่กีดขวางทางเดิน');
+sign('โปรเจกเตอร์',0,2.6,.5,1.4);
+
+/* student desks */
+var blocks=[{x:0,z:-2.8,hw:1.1,hd:.5},{x:4.7,z:-2.3,hw:.35,hd:.9},{x:-4.3,z:-3.4,hw:.25,hd:.25},{x:-4.3,z:3.4,hw:.25,hd:.25},{x:4.3,z:3.5,hw:.25,hd:.25}];var chairs=[];
+function desk(x,z){var g=new THREE.Group();scene.add(g);
+box(1.2,.05,.6,0xd9b98a,x,.72,z,g);box(.05,.7,.5,0x777f8a,x-.55,.36,z,g);box(.05,.7,.5,0x777f8a,x+.55,.36,z,g);
+var cc=[0x2f6f9f,0xe07a5f,0x3d9970][Math.abs(Math.round(x*3+z*5))%3];chairs.push({x:x,z:z+.62});shade(1.7,1.9,x,z+.35,g);box(.42,.05,.42,cc,x,.43,z+.62,g);box(.42,.4,.05,cc,x,.68,z+.83,g);box(.05,.4,.05,0x777f8a,x,.2,z+.62,g);
+info(g,'โต๊ะ–เก้าอี้นักเรียน','ที่นั่งสำหรับเรียนและจดบันทึก ควรนั่งหลังตรงและปรับระยะให้สบายเพื่อไม่ให้ปวดหลัง');
+blocks.push({x:x,z:z+.3,hw:.75,hd:.8});}
+[-2.6,0,2.6].forEach(function(x){[-.8,.7,2.2].forEach(function(z){desk(x,z);});});
+sign('โต๊ะนักเรียน',0,1.5,-.8,1.5);
+
+/* bookshelf (right wall) */
+var bs=new THREE.Group();scene.add(bs);
+box(.45,2,1.7,0x7a5230,4.72,1,-2.3,bs);
+[.5,1.1,1.7].forEach(function(y,i){box(.5,.03,1.65,0x5f3f22,4.7,y,-2.3,bs);
+for(var k=0;k<6;k++)box(.25,.3,.18,[0xc0392b,0x2980b9,0x27ae60,0xf1c40f,0x8e44ad][(i+k)%5],4.65,y+.17,-2.3-.65+k*.26,bs);});
+info(bs,'ตู้หนังสือ','เก็บหนังสือเรียน คู่มือ และสื่อการเรียนรู้ นักเรียนยืมอ่านได้ตามกติกาของห้อง');
+sign('ตู้หนังสือ',4.5,2.45,-2.3,1.3);
+
+/* windows (left wall) */
+var wd=new THREE.Group();scene.add(wd);
+[-2,0,2].forEach(function(z){box(.06,1.3,1.7,0xffffff,-4.97,1.7,z,wd);var g=basic(1.5,1.1,0x9bd6ff,-4.93,1.7,z,wd);g.rotation.y=Math.PI/2;});
+info(wd,'หน้าต่าง','รับแสงธรรมชาติและช่วยระบายอากาศ ช่วยให้ห้องสว่างโดยประหยัดไฟฟ้า');
+sign('หน้าต่าง',-4.8,2.7,0,1.2);
+
+/* door (right wall) */
+var dr=new THREE.Group();scene.add(dr);
+var doorOpen=false,doorA=0;dr.position.set(4.97,0,3.1);var hall=basic(1,2.2,0xdbe8f5,4.985,1.1,2.6);hall.rotation.y=-Math.PI/2;hall.raycast=function(){};box(.06,2.2,1,0x8b5a2b,0,1.1,-.5,dr);box(.1,.08,.12,0xd4af37,-.07,1.05,-.9,dr);dr.userData.act=function(){doorOpen=!doorOpen;};
+info(dr,'ประตูห้องเรียน','ทางเข้า–ออกหลักของห้อง ควรเปิดทางเดินหน้าประตูให้โล่งเพื่อความปลอดภัย');
+sign('ประตู',4.7,2.45,2.6,1);
+
+/* air conditioner (back wall) */
+var ac=new THREE.Group();scene.add(ac);
+box(1.3,.36,.25,0xf5f7fa,2,2.65,3.87,ac);box(1.1,.04,.02,0x9aa7b8,2,2.55,3.74,ac);
+info(ac,'เครื่องปรับอากาศ','ควบคุมอุณหภูมิในห้องให้เหมาะสมต่อการเรียน ตั้งอุณหภูมิประมาณ 25–26 องศาเซลเซียสเพื่อประหยัดไฟ');
+sign('แอร์',2,3.05,3.7,.9);
+
+/* teacher NPC */
+var T=new THREE.Group();scene.add(T);
+function limb(w,h,d,c,x,y,p){var v=new THREE.Group();v.position.set(x,y,0);p.add(v);box(w,h,d,c,0,-h/2,0,v);return v;}
+var legL=limb(.13,.72,.15,0x2b3a55,-.1,.76,T),legR=limb(.13,.72,.15,0x2b3a55,.1,.76,T);
+box(.46,.58,.26,0x2e86c1,0,1.05,0,T);box(.07,.3,.02,0xc0392b,0,1.1,.14,T);
+var armL=limb(.11,.55,.13,0x2e86c1,-.29,1.31,T),armR=limb(.11,.55,.13,0x2e86c1,.29,1.31,T);
+box(.1,.1,.12,0xf1c27d,0,-.58,0,armL);box(.1,.1,.12,0xf1c27d,0,-.58,0,armR);
+var head=new THREE.Mesh(new THREE.SphereGeometry(.15,10,8),mat(0xf1c27d));head.position.y=1.5;T.add(head);
+box(.31,.1,.3,0x1a1a1a,0,1.62,-.02,T);box(.03,.03,.02,0x111111,-.06,1.52,.14,T);box(.03,.03,.02,0x111111,.06,1.52,.14,T);
+info(T,'คุณครูประจำวิชา','คุณครูเดินตรวจรอบห้องเรียน คอยดูแลและตอบคำถามนักเรียน และมาเขียนอธิบายที่หน้ากระดานเป็นระยะ');
+sign('คุณครู',0,2,0,1);var tsign=signs.children[signs.children.length-1];
+var wp=[[-1.8,-3.3,3],[-1.3,-1.8,0],[-1.3,2.9,1.2],[1.3,2.9,0],[1.3,-1.8,0],[3.9,-1.8,0],[3.9,2.9,1.2],[3.9,-1.8,0],[-1.3,-1.8,0]],wi=1,wait=3,writing=true,ph=0,face=Math.PI;
+T.position.set(-1.8,0,-3.3);T.rotation.y=Math.PI;
+var tblk={x:-1.8,z:-3.3,hw:.25,hd:.25};blocks.push(tblk);
+function npc(dt){var moving=false;if(wait<=0&&Math.hypot(T.position.x-px,T.position.z-pz)<.75)wait=.3;
+if(wait>0)wait-=dt;
+else{var w=wp[wi],dx=w[0]-T.position.x,dz=w[1]-T.position.z,d=Math.hypot(dx,dz);
+if(d<.08){writing=(wi===0);wait=w[2];wi=(wi+1)%wp.length;}
+else{writing=false;moving=true;face=Math.atan2(dx,dz);var st=Math.min(d,1.1*dt);T.position.x+=dx/d*st;T.position.z+=dz/d*st;}}
+var df=face-T.rotation.y;df=Math.atan2(Math.sin(df),Math.cos(df));T.rotation.y+=df*Math.min(1,dt*8);
+ph+=moving?dt*6:0;var s=moving?Math.sin(ph)*.7:0;
+legL.rotation.x=s;legR.rotation.x=-s;armL.rotation.x=-s*.8;armR.rotation.x=s*.8;
+if(writing){armR.rotation.x=-1.5+Math.sin(performance.now()/200)*.12;armL.rotation.x=0;}
+tblk.x=T.position.x;tblk.z=T.position.z;tsign.position.set(T.position.x,2,T.position.z);}
+
+/* player avatar */
+var A=new THREE.Group();scene.add(A);
+var lL=limb(.13,.72,.15,0x1e3a8a,-.1,.76,A),lR=limb(.13,.72,.15,0x1e3a8a,.1,.76,A);
+box(.44,.56,.25,0xffffff,0,1.05,0,A);var pack=box(.3,.36,.14,0xe07a5f,0,1.05,-.2,A);
+var aL=limb(.1,.55,.12,0xffffff,-.28,1.31,A),aR=limb(.1,.55,.12,0xffffff,.28,1.31,A);
+box(.09,.1,.11,0xf1c27d,0,-.58,0,aL);box(.09,.1,.11,0xf1c27d,0,-.58,0,aR);
+var hh=new THREE.Mesh(new THREE.SphereGeometry(.15,10,8),mat(0xf1c27d));hh.position.y=1.5;A.add(hh);
+box(.31,.1,.3,0x4a2c17,0,1.62,-.02,A);box(.03,.03,.02,0x111111,-.06,1.52,.14,A);box(.03,.03,.02,0x111111,.06,1.52,.14,A);
+shade(.8,.8,0,0,A);A.traverse(function(o){o.raycast=function(){};});
+sign('คุณ',0,2,0,.7);var asign=signs.children[signs.children.length-1];
+var view3=true,mx=-1.3,mz=.2,mface=Math.PI,mph=0;
+var emo=0,emoT=0,lightsOn=true,isNight=false,bt=0,cool=2;
+var slides=['ห้องเรียนเสมือนจริง|เรียนรู้ผ่านโลก 3 มิติ','Three.js|ไลบรารีสร้างกราฟิก 3 มิติบนเว็บ','วิธีควบคุม|W A S D เดิน • Space กระโดด • E นั่ง','ขอบคุณที่เข้าเรียน|พบกันใหม่คาบหน้า'],si=0,pOn=false;
+var pcv=document.createElement('canvas');pcv.width=1024;pcv.height=380;var pg=pcv.getContext('2d'),ptex=new THREE.CanvasTexture(pcv);
+function drawSlide(){var t=slides[si].split('|');pg.fillStyle='#0f2744';pg.fillRect(0,0,1024,380);pg.textAlign='center';pg.fillStyle='#22d3ee';pg.font='700 66px sans-serif';pg.fillText(t[0],512,150);pg.fillStyle='#e8f1ff';pg.font='500 40px sans-serif';pg.fillText(t[1],512,240);pg.fillStyle='#9fb3d1';pg.font='400 26px sans-serif';pg.fillText('สไลด์ '+(si+1)+'/'+slides.length+' • คลิกกระดานเพื่อเปลี่ยนสไลด์',512,330);ptex.needsUpdate=true;}
+var scr=basic(3.9,1.4,ptex,0,1.7,-3.9);scr.visible=false;scr.raycast=function(){};
+pj.userData.act=function(){pOn=!pOn;scr.visible=pOn;if(pOn)drawSlide();};
+wb.userData.act=function(){if(pOn){si=(si+1)%slides.length;drawSlide();}};
+var bcv=document.createElement('canvas');bcv.width=640;bcv.height=128;var bg2=bcv.getContext('2d'),btex=new THREE.CanvasTexture(bcv),bub=new THREE.Sprite(new THREE.SpriteMaterial({map:btex}));bub.scale.set(3,.6,1);bub.layers.set(1);bub.visible=false;scene.add(bub);
+function say(t){cool=7;bt=3;wait=Math.max(wait,3);writing=false;face=Math.atan2(px-T.position.x,pz-T.position.z);bg2.fillStyle='#ffffff';bg2.fillRect(0,0,640,128);bg2.strokeStyle='#0e7490';bg2.lineWidth=6;bg2.strokeRect(3,3,634,122);bg2.fillStyle='#0b1a33';bg2.font='600 36px sans-serif';bg2.textAlign='center';bg2.textBaseline='middle';bg2.fillText(t,320,64);btex.needsUpdate=true;bub.visible=true;}
+function startEmo(n){emo=(emo===n&&n===3)?0:n;emoT=performance.now()+4000;}
+function applyLight(){hemi.intensity=(lightsOn?.7:.18)+(isNight?0:.3);dl.intensity=(lightsOn?.35:.05)+(isNight?0:.15);lamps.forEach(function(l){l.material.color.setHex(lightsOn?0xffffff:0x4a505c);});wd.traverse(function(o){if(o.material&&o.material.isMeshBasicMaterial)o.material.color.setHex(isNight?0x0b1b3a:0x9bd6ff);});document.getElementById('nt').textContent=isNight?'☀️ กลางวัน':'🌙 กลางคืน';}
+function toggleLight(n){if(n)isNight=!isNight;else lightsOn=!lightsOn;applyLight();}
+function world(dt){var d=new Date();hmin.rotation.z=-(d.getMinutes()+d.getSeconds()/60)/60*6.2832;hhr.rotation.z=-((d.getHours()%12)+d.getMinutes()/60)/12*6.2832;
+doorA+=((doorOpen?1.4:0)-doorA)*Math.min(1,dt*4);dr.rotation.y=doorA;
+bt-=dt;cool-=dt;if(bt<=0)bub.visible=false;
+var dd=Math.hypot(T.position.x-px,T.position.z-pz),lim=emo===3?7:2.6;
+if(cool<=0&&dd<lim)say(emo===3?'ว่ายังไงจ๊ะ มีคำถามไหม?':emo===1?'สวัสดีจ้ะ!':emo===2?'ร่าเริงดีนะ ตั้งใจเรียนด้วย!':sit?'ตั้งใจเรียนนะจ๊ะ':'สวัสดีนักเรียน ยินดีต้อนรับ!');
+bub.position.set(T.position.x,2.4,T.position.z);}
+var sit=null,jy=0,vy=0,tm=0,tip=document.getElementById('tip');
+function nearChair(){var best=null,bd=1.7;if(jy>0)return null;for(var i=0;i<chairs.length;i++){var c=chairs[i],d=Math.hypot(c.x-px,c.z-pz);if(d<bd){bd=d;best=c;}}return best;}
+function trySit(){var c=nearChair();if(c){sit=c;px=c.x;pz=c.z;mx=px;mz=pz;mface=Math.PI;yaw=0;target=null;}}
+function standUp(){if(!sit)return;var sd=sit.x>=0?1:-1,c=[[sit.x+sd*1.3,sit.z],[sit.x-sd*1.3,sit.z],[-1.3,sit.z],[1.3,sit.z],[-1.3,.2]],n=c[c.length-1];for(var i=0;i<c.length;i++){if(ok(c[i][0],c[i][1])){n=c[i];break;}}px=n[0];pz=n[1];mx=px;mz=pz;sit=null;}A.rotation.y=Math.PI;
+function me(dt){if(jy>0||vy>0){vy-=14*dt;jy+=vy*dt;if(jy<=0){jy=0;vy=0;}}var dx=px-mx,dz=pz-mz,moving=Math.hypot(dx,dz)>1e-4;
+if(moving){mface=Math.atan2(dx,dz);mph+=dt*6;mx=px;mz=pz;}
+var s=moving?Math.sin(mph)*.7:0;lL.rotation.x=s;lR.rotation.x=-s;aL.rotation.x=-s*.8;aR.rotation.x=s*.8;
+var df=mface-A.rotation.y;df=Math.atan2(Math.sin(df),Math.cos(df));A.rotation.y+=df*Math.min(1,dt*10);
+var tt=performance.now()/1000;if(emo&&(moving||jy>0||(sit&&emo!==3)||(emo!==3&&performance.now()>emoT)))emo=0;aR.rotation.z=0;
+if(sit){lL.rotation.x=lR.rotation.x=-1.4;aL.rotation.x=aR.rotation.x=-1.2;}else if(jy>0){aL.rotation.x=aR.rotation.x=-2.4;}
+if(emo===1){aR.rotation.x=-2.8;aR.rotation.z=Math.sin(tt*10)*.5;}else if(emo===2){var q=Math.sin(tt*8);aL.rotation.x=-1.6+q*1.1;aR.rotation.x=-1.6-q*1.1;lL.rotation.x=q*.5;lR.rotation.x=-q*.5;mface+=dt*4;}else if(emo===3){aR.rotation.x=-3;}
+pack.visible=!sit;A.position.set(px,(sit?-.3:jy)+(emo===2?Math.abs(Math.sin(tt*8))*.08:0),pz);A.visible=asign.visible=view3;var m=sit?2:(nearChair()?1:0);if(m!==tm){tm=m;tip.hidden=!m;tip.textContent=m===2?'กด E หรือ Space เพื่อลุกขึ้น':'กด E เพื่อนั่ง';}
+if(view3){pitch=Math.max(-.7,Math.min(.5,pitch));var D=2.4,cp=Math.cos(pitch),cx=px+Math.sin(yaw)*cp*D,cy=1.5+jy-(sit?.35:0)-Math.sin(pitch)*D,cz=pz+Math.cos(yaw)*cp*D;
+camera.position.set(Math.max(-4.85,Math.min(4.85,cx)),Math.max(.3,Math.min(3,cy)),Math.max(-3.85,Math.min(3.85,cz)));camera.lookAt(px,(sit?1.05:1.4)+jy*.6,pz);asign.position.set(px,(sit?1.65:1.95)+jy,pz);}
+else{camera.position.set(px,(sit?1.3:1.6)+jy,pz);camera.rotation.set(pitch,yaw,0,'YXZ');}}
+
+/* controls */
+var px=-1.3,pz=.2,yaw=0,pitch=-.15,target=null,keys={};
+function ok(x,z){if(Math.abs(x)>4.6||z<-3.6||z>3.6)return false;
+for(var i=0;i<blocks.length;i++){var b=blocks[i];if(Math.abs(x-b.x)<b.hw+.25&&Math.abs(z-b.z)<b.hd+.25)return false;}return true;}
+function move(dx,dz){if(sit)return;if(ok(px+dx,pz))px+=dx;if(ok(px,pz+dz))pz+=dz;}
+addEventListener('keydown',function(e){keys[e.code]=true;if(e.code==='Space'){e.preventDefault();if(sit)standUp();else if(jy===0)vy=4.6;}if(e.code==='KeyE'&&!e.repeat){if(sit)standUp();else trySit();}
+if(!e.repeat){if(e.code==='KeyL')toggleLight(false);if(e.code==='KeyN')toggleLight(true);if(e.code==='KeyZ'&&!sit)startEmo(1);if(e.code==='KeyX'&&!sit)startEmo(2);if(e.code==='KeyH')startEmo(3);}});
+addEventListener('keyup',function(e){keys[e.code]=false;});
+var drag=false,sx=0,sy=0,lx=0,ly=0,ray=new THREE.Raycaster(),mv=new THREE.Vector2();
+function pick(e){mv.set(e.clientX/innerWidth*2-1,-(e.clientY/innerHeight)*2+1);ray.setFromCamera(mv,camera);
+var hs=ray.intersectObjects(scene.children,true);if(!hs.length)return null;var h=hs[0];
+if(h.object===floor)return{floor:h.point};
+var o=h.object;while(o&&!o.userData.info)o=o.parent;return o?{obj:o}:null;}
+cv.addEventListener('pointerdown',function(e){drag=true;sx=lx=e.clientX;sy=ly=e.clientY;cv.setPointerCapture(e.pointerId);});
+cv.addEventListener('pointermove',function(e){
+if(drag){yaw-=(e.clientX-lx)*.005;pitch=Math.max(-1.2,Math.min(1.2,pitch-(e.clientY-ly)*.005));lx=e.clientX;ly=e.clientY;}
+else if(e.pointerType==='mouse'){var p=pick(e);cv.style.cursor=p?'pointer':'grab';}});
+cv.addEventListener('pointerup',function(e){drag=false;
+if(Math.hypot(e.clientX-sx,e.clientY-sy)>6)return;var p=pick(e);if(!p)return;
+if(p.floor)return;
+else{if(p.obj.userData.act)p.obj.userData.act();document.getElementById('it').textContent=p.obj.userData.info.t;document.getElementById('id').textContent=p.obj.userData.info.d;document.getElementById('info').style.display='block';}});
+cv.addEventListener('dblclick',function(e){var p=pick(e);if(p&&p.floor){if(sit)standUp();target={x:p.floor.x,z:p.floor.z};}});
+cv.addEventListener('pointercancel',function(){drag=false;});
+cv.addEventListener('lostpointercapture',function(){drag=false;});
+addEventListener('blur',function(){keys={};drag=false;});
+document.addEventListener('visibilitychange',function(){keys={};});
+cv.addEventListener('wheel',function(e){e.preventDefault();var s=-e.deltaY*.004;move(-Math.sin(yaw)*s,-Math.cos(yaw)*s);},{passive:false});
+document.getElementById('x').onclick=function(){document.getElementById('info').style.display='none';};
+document.querySelectorAll('button').forEach(function(b){b.addEventListener('click',function(){b.blur();});});
+document.getElementById('lt').onclick=function(){toggleLight(false);};document.getElementById('nt').onclick=function(){toggleLight(true);};
+document.getElementById('vw').onclick=function(){view3=!view3;this.textContent=view3?'มุมมอง: บุคคลที่ 3':'มุมมอง: บุคคลที่ 1';};
+document.getElementById('tg').onclick=function(){signs.visible=!signs.visible;};
+document.getElementById('reset').onclick=function(){px=-1.3;pz=.2;yaw=0;pitch=-.15;target=null;};
+addEventListener('resize',function(){renderer.setSize(innerWidth,innerHeight);camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();});
+
+var last=performance.now();
+function tick(t){requestAnimationFrame(tick);var dt=Math.min((t-last)/1000,.1);last=t;
+var f=(keys.KeyW||keys.ArrowUp?1:0)-(keys.KeyS||keys.ArrowDown?1:0),s=(keys.KeyD||keys.ArrowRight?1:0)-(keys.KeyA||keys.ArrowLeft?1:0),sp=(keys.ShiftLeft||keys.ShiftRight?4:2.2)*dt;
+if(sit){if(f||s)standUp();}else if(f||s){target=null;move((-Math.sin(yaw)*f+Math.cos(yaw)*s)*sp,(-Math.cos(yaw)*f-Math.sin(yaw)*s)*sp);}
+else if(target){var dx=target.x-px,dz=target.z-pz,d=Math.hypot(dx,dz);
+if(d<.15)target=null;else{var ox=px,oz=pz;move(dx/d*sp*1.3,dz/d*sp*1.3);if(Math.hypot(px-ox,pz-oz)<1e-5)target=null;}}
+npc(dt);me(dt);world(dt);renderer.render(scene,camera);}
+requestAnimationFrame(tick);
+})();
+</script></body></html>
